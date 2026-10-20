@@ -1,0 +1,2 @@
+# searxng: the valkey image tag on line 36 reads as a key/value pair to the generic rule; not a secret.
+e2b0158850147f345b9cefe11d98205bcc52f067:searxng/compose.yaml:generic-api-key:36
