@@ -1,0 +1,42 @@
+# Every merge to main publishes the catalog: running Falak panels fetch it within the hour (templates:sync).
+#   catalog.tar.gz  the template directories + VERSION
+#   catalog.json    {version, sha256, generated_at}
+name: release
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check every template with the latest Falak
+        run: ./test --static $(git ls-files '*/template.yaml' | xargs -n1 dirname)
+
+      - name: Build the catalog
+        run: |
+          version="$(date -u +%Y.%m.%d).${GITHUB_RUN_NUMBER}"
+          echo "$version" > VERSION
+          mapfile -t dirs < <(git ls-files '*/template.yaml' | xargs -n1 dirname)
+          tar --sort=name --owner=0 --group=0 --numeric-owner -czf catalog.tar.gz VERSION "${dirs[@]}"
+          jq -n --arg version "$version" --arg sha256 "$(sha256sum catalog.tar.gz | cut -d' ' -f1)" \
+            --arg generated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{version: $version, sha256: $sha256, generated_at: $generated_at}' > catalog.json
+          cat catalog.json
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${VERSION}" catalog.tar.gz catalog.json --latest \
+            --title "Catalog ${VERSION}" --notes "Templates at ${GITHUB_SHA}."

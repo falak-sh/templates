@@ -1,0 +1,37 @@
+# Every PR: each changed template is checked with Falak's own code (latest release and its min_falak) and booted.
+name: test
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Changed templates
+        id: changed
+        run: |
+          slugs=$(git diff --name-only "origin/${GITHUB_BASE_REF}...HEAD" | cut -d/ -f1 | sort -u | while read -r d; do
+            if [ -f "$d/template.yaml" ]; then echo "$d"; fi
+          done | tr '\n' ' ')
+          echo "slugs=$slugs" >> "$GITHUB_OUTPUT"
+          echo "changed: ${slugs:-none}"
+
+      - name: Check and boot (latest Falak)
+        if: steps.changed.outputs.slugs != ''
+        run: ./test ${{ steps.changed.outputs.slugs }}
+
+      - name: Check against each template's min_falak
+        if: steps.changed.outputs.slugs != ''
+        run: ./test --static --falak min ${{ steps.changed.outputs.slugs }}
+
+      - name: Check the whole catalog (no template changed)
+        if: steps.changed.outputs.slugs == ''
+        run: ./test --static $(git ls-files '*/template.yaml' | xargs -n1 dirname)

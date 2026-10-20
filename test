@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+# Check a template with Falak's own code, then boot it on Docker.
+#
+#   ./test <slug>... [--falak <version>|min] [--static] [--keep]
+#
+#   --falak <v>   the Falak release to check against (default: latest; `min`: each template's min_falak)
+#   --static      only Falak's checks (rules + rendering): no image lookups, no boot
+#   --keep        leave the stack running after a boot (inspect it, then `docker compose -p tpl-<slug> down -v`)
+#
+# Needs Docker (with Compose v2) and jq. FALAK_CHECKER="php /path/to/control-plane/artisan" uses a local Falak
+# checkout instead of the control-plane image. TIMEOUT (seconds, default 900) bounds the wait for healthy services.
+set -euo pipefail
+
+IMAGE=ghcr.io/falak-sh/falak-control-plane
+CURL=curlimages/curl:8.11.1
+TIMEOUT=${TIMEOUT:-900}
+falak=latest static=0 keep=0 slugs=()
+
+while (($#)); do
+    case $1 in
+        --falak) falak=${2:?--falak needs a version}; shift 2 ;;
+        --static) static=1; shift ;;
+        --keep) keep=1; shift ;;
+        -h | --help) sed -n '2,12p' "$0"; exit 0 ;;
+        -*) echo "unknown option $1" >&2; exit 2 ;;
+        *) slugs+=("${1%/}"); shift ;;
+    esac
+done
+
+if ((${#slugs[@]} == 0)); then
+    echo "usage: ./test <slug>... [--falak <version>|min] [--static] [--keep]" >&2
+    exit 2
+fi
+
+cd "$(dirname "$0")"
+failed=()
+
+fail() {
+    echo "FAIL $slug: $*" >&2
+    failed+=("$slug")
+}
+
+# Falak's renderer: validation (import + catalog rules), the compose file as deployed, sample inputs, public services.
+render() {
+    local dir=$1 out=$2 version=$3
+    if [[ -n ${FALAK_CHECKER:-} ]]; then
+        # shellcheck disable=SC2086 # FALAK_CHECKER is a command line
+        $FALAK_CHECKER templates:render "$PWD/$dir" --env-file="$out/.env" --public-file="$out/public.json" >"$out/compose.yaml"
+    else
+        chmod 0777 "$out" # the image runs as www-data
+        docker run --rm -e CACHE_STORE=array -e DB_DATABASE=:memory: -e SESSION_DRIVER=array -e FALAK_TEMPLATES_URL= \
+            -v "$PWD/$dir:/t:ro" -v "$out:/out" --entrypoint php "$IMAGE:$version" \
+            artisan templates:render /t --env-file=/out/.env --public-file=/out/public.json >"$out/compose.yaml"
+    fi
+}
+
+inspected=' ' # images already checked (bash 3.2 has no associative arrays)
+
+# Every image pinned, and published for amd64 + arm64 (Falak servers are both).
+images_ok() {
+    local compose=$1 env=$2 image manifest platform ok=0
+    while read -r image; do
+        [[ $inspected == *" $image "* ]] && continue
+        inspected+="$image "
+        case $image in
+            *@sha256:*) ;;
+            *:latest) echo "  $image: pin a version, not latest" >&2; ok=1; continue ;;
+            *:*) ;;
+            *) echo "  $image: pin a version tag" >&2; ok=1; continue ;;
+        esac
+        if ! manifest=$(docker buildx imagetools inspect --raw "$image" 2>&1); then
+            echo "  $image: could not inspect it: ${manifest##*$'\n'}" >&2
+            ok=1
+            continue
+        fi
+        for platform in linux/amd64 linux/arm64; do
+            jq -e --arg p "$platform" '[.manifests[]?.platform | "\(.os)/\(.architecture)"] | index($p)' <<<"$manifest" >/dev/null \
+                || { echo "  $image: no $platform image" >&2; ok=1; }
+        done
+    done < <(docker compose -f "$compose" --env-file "$env" config --images)
+    return "$ok"
+}
+
+boot() {
+    local compose=$1 env=$2 public=$3 project=$4 service port path container code
+    if ! docker compose -p "$project" -f "$compose" --env-file "$env" up -d --quiet-pull --wait --wait-timeout "$TIMEOUT"; then
+        docker compose -p "$project" -f "$compose" --env-file "$env" ps -a >&2 || true
+        docker compose -p "$project" -f "$compose" --env-file "$env" logs --tail 30 >&2 || true
+        echo "  services did not become healthy within ${TIMEOUT}s" >&2
+        return 1
+    fi
+    while read -r service port path; do
+        container=$(docker compose -p "$project" -f "$compose" --env-file "$env" ps -q "$service")
+        # The service's own network namespace: whatever networks the template defines, 127.0.0.1 is the service.
+        code=$(docker run --rm --network "container:$container" "$CURL" -s -o /dev/null -w '%{http_code}' --max-time 30 "http://127.0.0.1:$port$path" || true)
+        if [[ ! $code =~ ^[1-4][0-9][0-9]$ ]]; then
+            echo "  $service:$port$path answered ${code:-nothing} (want < 500)" >&2
+            return 1
+        fi
+        echo "  $service:$port$path → $code"
+    done < <(jq -r '.[] | "\(.service) \(.port) \(.path)"' "$public")
+}
+
+for slug in "${slugs[@]}"; do
+    if [[ ! -f $slug/template.yaml ]]; then
+        fail "no $slug/template.yaml"
+        continue
+    fi
+    if ! grep -qx "slug: $slug" "$slug/template.yaml"; then
+        fail "slug in template.yaml must be \"$slug\" (the directory name); panels skip a mismatch"
+        continue
+    fi
+
+    version=$falak
+    if [[ $falak == min ]]; then
+        min=$(sed -n 's/^min_falak: *//p' "$slug/template.yaml")
+        if [[ -z $min ]]; then
+            echo "SKIP $slug: no min_falak"
+            continue
+        fi
+        version=v$min
+    fi
+
+    out=$(mktemp -d)
+    project=tpl-$slug
+    if [[ $keep == 0 ]]; then
+        # shellcheck disable=SC2064 # expand now: one trap per template
+        trap "docker compose -p '$project' -f '$out/compose.yaml' --env-file '$out/.env' down -v --remove-orphans >/dev/null 2>&1 || true; rm -rf '$out'" EXIT
+    fi
+
+    echo "── $slug (Falak $version)"
+    if ! render "$slug" "$out" "$version"; then
+        fail "Falak's checks"
+        continue
+    fi
+    if [[ $static == 0 ]]; then
+        if ! images_ok "$out/compose.yaml" "$out/.env"; then
+            fail "images"
+            continue
+        fi
+        if ! boot "$out/compose.yaml" "$out/.env" "$out/public.json" "$project"; then
+            fail "boot"
+        fi
+    fi
+    if [[ $keep == 0 ]]; then
+        docker compose -p "$project" -f "$out/compose.yaml" --env-file "$out/.env" down -v --remove-orphans >/dev/null 2>&1 || true
+        rm -rf "$out"
+    fi
+    [[ " ${failed[*]-} " == *" $slug "* ]] || echo "PASS $slug"
+done
+
+if ((${#failed[@]})); then
+    echo "failed: ${failed[*]}" >&2
+    exit 1
+fi
