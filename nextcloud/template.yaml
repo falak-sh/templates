@@ -1,6 +1,6 @@
 name: Nextcloud
 slug: nextcloud
-version: 1.0.0
+version: 1.0.1
 description: Files, calendar, contacts and office in one self-hosted cloud — a Google Drive alternative.
 category: storage
 icon: nextcloud

@@ -1,7 +1,7 @@
 # Open the site right after the first deploy to run the installer (it creates the admin account).
 services:
   wordpress:
-    image: wordpress:7.1.2-php8.3-apache
+    image: wordpress:7.1.3-php8.3-apache
     restart: unless-stopped
     expose: ["80"]
     depends_on:

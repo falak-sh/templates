@@ -1,6 +1,6 @@
 name: Adminer
 slug: adminer
-version: 1.0.0
+version: 1.0.1
 description: Database manager in one page for PostgreSQL, MySQL, MariaDB, SQLite and more.
 category: databases
 icon: adminer
