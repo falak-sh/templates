@@ -1,0 +1,120 @@
+# Paperclip makes its first admin through a one-time CLI invite, and anyone can sign up on a public instance. Sign-up
+# is off here; `setup` creates the admin from the inputs once Paperclip has migrated the database (a Better Auth of its
+# own, sign-up on, against Paperclip's auth tables), grants it instance_admin when no admin exists yet, then stays up
+# idle. Every start re-checks; a password changed in Paperclip is left alone.
+services:
+  paperclip:
+    image: ghcr.io/paperclipai/paperclip:2026.1012.0
+    restart: unless-stopped
+    expose: ["3100"]
+    pids_limit: 2048
+    stop_grace_period: 90s
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://paperclip:${POSTGRES_PASSWORD}@db:5432/paperclip
+      PORT: "3100"
+      SERVE_UI: "true"
+      PAPERCLIP_DEPLOYMENT_MODE: authenticated
+      PAPERCLIP_DEPLOYMENT_EXPOSURE: public
+      PAPERCLIP_PUBLIC_URL: ${{ falak.url(paperclip) }}
+      PAPERCLIP_AUTH_DISABLE_SIGN_UP: "true"
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
+      PAPERCLIP_TOOL_ACTION_SIGNING_SECRET: ${PAPERCLIP_TOOL_ACTION_SIGNING_SECRET}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+    volumes:
+      - paperclip-data:/paperclip
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -o /dev/null http://127.0.0.1:3100/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 120s
+
+  setup:
+    image: ghcr.io/paperclipai/paperclip:2026.1012.0
+    restart: unless-stopped
+    working_dir: /app/server
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        rm -f /tmp/setup-done
+        node --input-type=module -e '
+          import { createRequire } from "node:module";
+          import { betterAuth } from "better-auth";
+          import { drizzleAdapter } from "better-auth/adapters/drizzle";
+          import { drizzle } from "drizzle-orm/postgres-js";
+          import { pgTable, text, timestamp, boolean } from "drizzle-orm/pg-core";
+          const postgres = (await import(createRequire("/app/packages/db/package.json").resolve("postgres"))).default;
+          const env = process.env;
+          const email = env.ADMIN_EMAIL.trim().toLowerCase();
+          const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+          while (!(await fetch("http://paperclip:3100/api/health").then((r) => r.ok, () => false))) await sleep(3000);
+          const ts = (n) => timestamp(n, { withTimezone: true });
+          const schema = {
+            user: pgTable("user", { id: text("id").primaryKey(), name: text("name").notNull(), email: text("email").notNull(),
+              emailVerified: boolean("email_verified").notNull().default(false), image: text("image"),
+              createdAt: ts("created_at").notNull(), updatedAt: ts("updated_at").notNull() }),
+            session: pgTable("session", { id: text("id").primaryKey(), expiresAt: ts("expires_at").notNull(), token: text("token").notNull(),
+              createdAt: ts("created_at").notNull(), updatedAt: ts("updated_at").notNull(), ipAddress: text("ip_address"),
+              userAgent: text("user_agent"), userId: text("user_id").notNull() }),
+            account: pgTable("account", { id: text("id").primaryKey(), issuer: text("issuer").notNull(), accountId: text("account_id").notNull(),
+              providerId: text("provider_id").notNull(), userId: text("user_id").notNull(), accessToken: text("access_token"),
+              refreshToken: text("refresh_token"), idToken: text("id_token"), accessTokenExpiresAt: ts("access_token_expires_at"),
+              refreshTokenExpiresAt: ts("refresh_token_expires_at"), scope: text("scope"), password: text("password"),
+              createdAt: ts("created_at").notNull(), updatedAt: ts("updated_at").notNull() }),
+            verification: pgTable("verification", { id: text("id").primaryKey(), identifier: text("identifier").notNull(),
+              value: text("value").notNull(), expiresAt: ts("expires_at").notNull(), createdAt: ts("created_at"), updatedAt: ts("updated_at") }),
+          };
+          const sql = postgres(env.DATABASE_URL, { max: 1 });
+          const find = () => sql.unsafe("SELECT id FROM \"user\" WHERE lower(email) = $$1", [email]).then((rows) => rows[0]);
+          if (!(await find())) {
+            const auth = betterAuth({ baseURL: "http://setup.invalid", secret: env.BETTER_AUTH_SECRET,
+              database: drizzleAdapter(drizzle(sql), { provider: "pg", schema }), emailAndPassword: { enabled: true } });
+            await auth.api.signUpEmail({ body: { email, password: env.ADMIN_PASSWORD, name: "Admin" } });
+            console.log("admin account created");
+          }
+          const admin = await find();
+          const granted = await sql.unsafe("INSERT INTO instance_user_roles (user_id, role) SELECT $$1, $$2 WHERE NOT EXISTS (SELECT 1 FROM instance_user_roles WHERE role = $$2) RETURNING id", [admin.id, "instance_admin"]);
+          console.log(granted.length ? "instance admin granted" : "instance admin already set");
+          await sql.end();
+        ' || exit 1
+        touch /tmp/setup-done
+        exec sleep infinity
+    depends_on:
+      paperclip:
+        condition: service_started
+    environment:
+      ADMIN_EMAIL: ${PAPERCLIP_ADMIN_EMAIL}
+      ADMIN_PASSWORD: ${PAPERCLIP_ADMIN_PASSWORD}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
+      DATABASE_URL: postgres://paperclip:${POSTGRES_PASSWORD}@db:5432/paperclip
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/setup-done"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 300s
+
+  db:
+    image: postgres:17.11-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: paperclip
+      POSTGRES_USER: paperclip
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - paperclip-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U paperclip -d paperclip"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+volumes:
+  paperclip-data:
+  paperclip-db:
