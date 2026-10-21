@@ -1,0 +1,50 @@
+name: Paperclip
+slug: paperclip
+version: 1.0.0
+description: Run a company of AI agents with org charts, goals, budgets and approvals, from one dashboard.
+category: ai
+icon: paperclip
+docs: https://docs.paperclip.ing/reference/deploy/docker/
+stateful: true
+min_memory_mb: 2048
+tags: [ai, agents, orchestration, llm]
+public:
+  - service: paperclip
+    port: 3100
+    health_check_path: /api/health
+inputs:
+  - key: PAPERCLIP_ADMIN_EMAIL
+    type: email
+    label: Admin email
+    description: Sign in with this email and the admin password. The account is created at the first start; invite others from Paperclip.
+  - key: PAPERCLIP_ADMIN_PASSWORD
+    type: secret
+    generate: password(24)
+    label: Admin password
+  - key: BETTER_AUTH_SECRET
+    type: secret
+    generate: secret(48)
+    label: Session secret
+  - key: PAPERCLIP_TOOL_ACTION_SIGNING_SECRET
+    type: secret
+    generate: hex(32)
+    label: Tool action signing secret
+  - key: POSTGRES_PASSWORD
+    type: secret
+    generate: password(32)
+    label: PostgreSQL password
+  - key: ANTHROPIC_API_KEY
+    type: secret
+    label: Anthropic API key
+    description: Optional. For Claude Code agents; you can also sign in to a subscription later.
+    required: false
+  - key: OPENAI_API_KEY
+    type: secret
+    label: OpenAI API key
+    description: Optional. For Codex agents.
+    required: false
+  - key: GEMINI_API_KEY
+    type: secret
+    label: Gemini API key
+    description: Optional. For Gemini CLI agents.
+    required: false
