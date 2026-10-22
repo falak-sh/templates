@@ -1,6 +1,6 @@
 name: WordPress
 slug: wordpress
-version: 1.0.0
+version: 1.0.1
 description: The world's most popular CMS, on Apache with MariaDB.
 category: cms
 icon: wordpress

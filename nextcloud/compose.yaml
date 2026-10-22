@@ -1,7 +1,7 @@
 # The first start installs Nextcloud (a few minutes). Falak's edge terminates TLS: Nextcloud trusts the proxy headers.
 services:
   nextcloud:
-    image: nextcloud:34.0.4-apache
+    image: nextcloud:34.0.5-apache
     restart: unless-stopped
     expose: ["80"]
     depends_on:
