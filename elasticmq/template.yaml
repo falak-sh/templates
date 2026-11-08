@@ -1,0 +1,19 @@
+name: ElasticMQ
+slug: elasticmq
+version: 1.0.0
+description: SQS-compatible queue with a web console. Survives restarts; a hard crash can lose the newest messages.
+category: databases
+icon: ./icon.svg
+docs: https://github.com/softwaremill/elasticmq
+stateful: true
+min_memory_mb: 512
+tags: [queue, sqs, messaging]
+public:
+  - service: console
+    port: 8080
+inputs:
+  - key: CONSOLE_PASSWORD
+    type: secret
+    generate: password(24)
+    label: Console password
+    description: Basic auth in front of the web console (user admin). The SQS API has no login and stays private.

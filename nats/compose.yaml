@@ -1,0 +1,57 @@
+# The client port (nats:4222) is not published: Falak's edge routes HTTP, so only apps that share a network with this
+# stack can reach it, with the token. NATS has no web UI; its monitoring page has no login, so it is published through
+# a basic-auth proxy (monitor). sync_interval: always flushes every write to disk, because a single server has no
+# replica to recover from; it costs throughput.
+services:
+  nats:
+    image: nats:2.15.2-alpine
+    restart: unless-stopped
+    expose: ["4222", "8222"]
+    environment:
+      NATS_TOKEN: ${NATS_TOKEN}
+    command:
+      - sh
+      - -c
+      - |
+        cat > /tmp/nats.conf <<'CONF'
+        server_name: nats
+        port: 4222
+        monitor_port: 8222
+        authorization { token: $$NATS_TOKEN }
+        jetstream { store_dir: /data, sync_interval: always }
+        CONF
+        exec nats-server --config /tmp/nats.conf
+    volumes:
+      - nats-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8222/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  monitor:
+    image: caddy:2.11.4-alpine
+    restart: unless-stopped
+    expose: ["8080"]
+    depends_on:
+      nats:
+        condition: service_healthy
+    environment:
+      MONITOR_PASSWORD: ${MONITOR_PASSWORD}
+    command:
+      - sh
+      - -c
+      - |
+        export MONITOR_HASH="$$(caddy hash-password --plaintext "$$MONITOR_PASSWORD")"
+        printf ':8080 {\n\tbasic_auth {\n\t\tadmin {$$MONITOR_HASH}\n\t}\n\treverse_proxy nats:8222\n}\n' > /etc/caddy/Caddyfile
+        exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:2019/config/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  nats-data:

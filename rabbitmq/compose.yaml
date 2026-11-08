@@ -1,0 +1,23 @@
+# AMQP (rabbitmq:5672) is not published: Falak's edge routes HTTP, so only apps that share a network with this stack
+# can reach it. The fixed hostname matters: RabbitMQ names its data directory after the node, so without it a recreated
+# container would start empty.
+services:
+  rabbitmq:
+    image: rabbitmq:4.4.0-management-alpine
+    restart: unless-stopped
+    hostname: rabbitmq
+    expose: ["5672", "15672"]
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD-SHELL", "rabbitmq-diagnostics -q check_running"]
+      interval: 30s
+      timeout: 15s
+      retries: 10
+      start_period: 40s
+
+volumes:
+  rabbitmq-data:

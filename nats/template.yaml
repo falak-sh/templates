@@ -1,0 +1,24 @@
+name: NATS
+slug: nats
+version: 1.0.0
+description: Lightweight messaging with durable streams and work queues (JetStream), plus a monitoring page.
+category: databases
+icon: nats
+docs: https://docs.nats.io
+stateful: true
+min_memory_mb: 256
+tags: [queue, pub-sub, messaging, streaming]
+public:
+  - service: monitor
+    port: 8080
+inputs:
+  - key: NATS_TOKEN
+    type: secret
+    generate: secret(32)
+    label: Client token
+    description: Clients connect with nats://<token>@nats:4222.
+  - key: MONITOR_PASSWORD
+    type: secret
+    generate: password(24)
+    label: Monitoring password
+    description: Basic auth in front of the monitoring page (user admin).
