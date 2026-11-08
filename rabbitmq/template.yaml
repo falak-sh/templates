@@ -1,0 +1,23 @@
+name: RabbitMQ
+slug: rabbitmq
+version: 1.0.0
+description: Message broker for queues and routing over AMQP, with its management UI.
+category: databases
+icon: rabbitmq
+docs: https://www.rabbitmq.com/docs
+stateful: true
+min_memory_mb: 512
+tags: [queue, amqp, messaging]
+public:
+  - service: rabbitmq
+    port: 15672
+inputs:
+  - key: RABBITMQ_USER
+    type: string
+    label: Admin user
+    default: admin
+  - key: RABBITMQ_PASSWORD
+    type: secret
+    generate: password(32)
+    label: Admin password
+    description: Set on first boot only; change it afterwards in the management UI.

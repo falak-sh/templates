@@ -1,0 +1,71 @@
+# ElasticMQ has no authentication, so the SQS API (elasticmq:9324) is never published; only apps that share a network
+# with this stack can reach it. The web UI has no login either and is published through a basic-auth proxy (console).
+# Messages survive restarts and redeploys, but a hard crash (power loss, OOM kill) can lose the most recently sent ones.
+services:
+  elasticmq:
+    image: softwaremill/elasticmq-native:1.7.1
+    restart: unless-stopped
+    expose: ["9324"]
+    entrypoint:
+      - /sbin/tini
+      - --
+      - sh
+      - -c
+      - |
+        cat > /opt/elasticmq.conf <<'CONF'
+        include classpath("application.conf")
+        node-address.host = "*"
+        messages-storage.enabled = true
+        auto-create-queues.enabled = true
+        CONF
+        exec /opt/elasticmq/bin/elasticmq-native-server -Dconfig.file=/opt/elasticmq.conf -Dlogback.configurationFile=/opt/logback.xml
+    volumes:
+      - elasticmq-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9324/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  ui:
+    image: softwaremill/elasticmq-ui:1.7.1
+    restart: unless-stopped
+    expose: ["3000"]
+    depends_on:
+      elasticmq:
+        condition: service_healthy
+    environment:
+      SQS_ENDPOINT: http://elasticmq:9324
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  console:
+    image: caddy:2.11.4-alpine
+    restart: unless-stopped
+    expose: ["8080"]
+    depends_on:
+      ui:
+        condition: service_healthy
+    environment:
+      CONSOLE_PASSWORD: ${CONSOLE_PASSWORD}
+    command:
+      - sh
+      - -c
+      - |
+        export CONSOLE_HASH="$$(caddy hash-password --plaintext "$$CONSOLE_PASSWORD")"
+        printf ':8080 {\n\tbasic_auth {\n\t\tadmin {$$CONSOLE_HASH}\n\t}\n\treverse_proxy ui:3000\n}\n' > /etc/caddy/Caddyfile
+        exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:2019/config/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  elasticmq-data:

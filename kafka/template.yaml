@@ -1,0 +1,24 @@
+name: Apache Kafka
+slug: kafka
+version: 1.0.0
+description: Event streaming on a single broker (KRaft, no ZooKeeper), with a web UI behind a login.
+category: databases
+icon: kafka
+docs: https://kafka.apache.org/documentation/
+stateful: true
+min_memory_mb: 2048
+tags: [queue, streaming, events, messaging]
+public:
+  - service: ui
+    port: 8080
+inputs:
+  - key: KAFKA_PASSWORD
+    type: secret
+    generate: secret(32)
+    label: Client password
+    description: Clients connect to kafka:9092 with SASL/PLAIN, user app.
+  - key: UI_PASSWORD
+    type: secret
+    generate: password(24)
+    label: Web UI password
+    description: Login for the web UI (user admin).
